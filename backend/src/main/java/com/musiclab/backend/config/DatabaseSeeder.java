@@ -6,6 +6,7 @@ import com.musiclab.backend.repository.MarketTrackRepository;
 import com.musiclab.backend.repository.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
 
@@ -18,6 +19,7 @@ import java.math.BigDecimal;
  * AJT Syllabus: Unit 4 — JPA Persistence via Repository pattern (Unit 8)
  */
 @Component
+@ConditionalOnProperty(name = "musiclab.legacy-seeder.enabled", havingValue = "true", matchIfMissing = false)
 public class DatabaseSeeder implements CommandLineRunner {
 
     private static final Logger logger = LoggerFactory.getLogger(DatabaseSeeder.class);
