@@ -46,14 +46,10 @@ export default function StudioLayout() {
 
   /**
    * Play/Pause handler.
-   * 1. Ensures AudioEngine is initialized (browser autoplay policy requires user gesture)
-   * 2. Toggles Zustand's visual state
-   * 3. Calls AudioEngine play/stop (Tone.js owns the actual audio time)
    */
   const handlePlayPause = useCallback(async () => {
     const engine = AudioEngine.getInstance();
 
-    // Initialize on first interaction (browser requires user gesture for audio)
     if (!engine.isInitialized()) {
       await engine.initialize();
     }
@@ -90,7 +86,6 @@ export default function StudioLayout() {
 
   /**
    * File upload handler.
-   * Flow: File → Java backend (store) → get stream URL → Zustand (visual) → AudioEngine (audio)
    */
   const handleFileUpload = useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -98,22 +93,18 @@ export default function StudioLayout() {
       if (!file) return;
 
       try {
-        // Ensure AudioEngine is initialized
         const engine = AudioEngine.getInstance();
         if (!engine.isInitialized()) {
           await engine.initialize();
         }
 
-        // Step 1: Upload to Java backend
         const uploadResult = await uploadAudioFile(file);
         const streamUrl = getStreamUrl(uploadResult.streamUrl);
 
-        // Step 2: Generate region ID and determine placement
         const regionId = `region-${Date.now()}`;
         const startTime = 0;
-        const duration = 5; // Default duration (avoiding complex audio header parsing)
+        const duration = 5;
 
-        // Step 3: Ensure a track exists — create default track if none
         const currentTracks = useStudioStore.getState().tracks;
         let targetTrackId: string;
 
@@ -130,7 +121,6 @@ export default function StudioLayout() {
           targetTrackId = currentTracks[0].trackId;
         }
 
-        // Step 4: Add region to Zustand store (visual representation)
         addRegionToTrack(targetTrackId, {
           sampleId: regionId,
           startTime,
@@ -138,16 +128,13 @@ export default function StudioLayout() {
           audioFileUrl: streamUrl,
         });
 
-        // Step 5: Load region into AudioEngine (Tone.js audio node)
         await engine.loadRegion(regionId, streamUrl, startTime);
-
         console.log(`[StudioLayout] Audio uploaded and loaded: ${uploadResult.storedFilename}`);
       } catch (error) {
         console.error("[StudioLayout] Upload failed:", error);
         alert("Failed to upload audio file. Ensure the backend is running.");
       }
 
-      // Reset file input so the same file can be uploaded again
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
@@ -157,13 +144,10 @@ export default function StudioLayout() {
 
   /**
    * Save Project handler.
-   * Maps Zustand state → Java MusicProject POJO → POST to /api/v1/studio/save.
-   * On the backend: JSON → MusicProject → ObjectOutputStream → byte[] → PostgreSQL BYTEA.
    */
   const handleSaveProject = useCallback(async () => {
     const state = useStudioStore.getState();
 
-    // CRITICAL: Map frontend state to match Java MusicProject POJO structure exactly
     const payload = {
       projectId: `project-${Date.now()}`,
       userId: "1",
@@ -195,10 +179,6 @@ export default function StudioLayout() {
 
   /**
    * Load Project handler.
-   * CRITICAL REHYDRATION SEQUENCE:
-   * 1. Fetch MusicProject JSON from Java backend (ObjectInputStream → Jackson → JSON)
-   * 2. Hydrate Zustand store (visual UI reconstruction)
-   * 3. Rebuild Tone.js audio graph (load each region into AudioEngine)
    */
   const handleLoadProject = useCallback(async () => {
     const projectId = prompt("Enter Project ID to load:");
@@ -207,20 +187,16 @@ export default function StudioLayout() {
     try {
       setRehydrating(true);
 
-      // Ensure AudioEngine is initialized
       const engine = AudioEngine.getInstance();
       if (!engine.isInitialized()) {
         await engine.initialize();
       }
 
-      // Dispose all existing Tone.js players before rebuilding
       engine.disposeAll();
 
-      // Step 1: Fetch project from Java backend
       const data = await loadProject(projectId);
       console.log("[StudioLayout] Project loaded from backend:", data.projectId);
 
-      // Step 2: Hydrate Zustand store (visual reconstruction)
       const hydratedTracks = (data.tracks || []).map((t) => ({
         trackId: t.trackId,
         name: t.name,
@@ -237,7 +213,6 @@ export default function StudioLayout() {
       hydrateProject(data.bpm, hydratedTracks);
       engine.setBpm(data.bpm);
 
-      // Step 3: Rebuild Tone.js audio graph — load every region
       for (const track of hydratedTracks) {
         for (const region of track.regions) {
           await engine.loadRegion(region.sampleId, region.audioFileUrl, region.startTime);
@@ -255,16 +230,17 @@ export default function StudioLayout() {
   }, [hydrateProject, setRehydrating]);
 
   return (
-    <div className="flex flex-col h-screen bg-gray-950 text-white font-sans">
+    <div className="flex flex-col h-full bg-[#f8f9fc] text-gray-900 font-sans">
       {/* ═══════ HEADER — Transport Controls ═══════ */}
-      <header className="flex items-center justify-between px-6 py-3 bg-gray-900 border-b border-gray-800 shrink-0">
+      <header className="flex items-center justify-between px-6 py-3 bg-white border-b border-gray-200 shrink-0">
         {/* Logo / Title */}
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-sm font-bold">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-sm font-bold text-white">
             M
           </div>
-          <h1 className="text-lg font-semibold tracking-tight">
-            Music<span className="text-violet-400">Lab</span>
+          <h1 className="text-lg font-semibold tracking-tight text-gray-900">
+            Music<span className="text-violet-600">Lab</span>
+            <span className="text-gray-400 text-sm ml-1.5 font-normal">Studio</span>
           </h1>
         </div>
 
@@ -273,7 +249,7 @@ export default function StudioLayout() {
           {/* Stop Button */}
           <button
             onClick={handleStop}
-            className="w-10 h-10 rounded-lg bg-gray-800 hover:bg-gray-700 flex items-center justify-center transition-colors"
+            className="w-10 h-10 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 flex items-center justify-center transition-colors border border-gray-200"
             title="Stop"
           >
             <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
@@ -284,10 +260,10 @@ export default function StudioLayout() {
           {/* Play / Pause Button */}
           <button
             onClick={handlePlayPause}
-            className={`w-12 h-12 rounded-full flex items-center justify-center transition-all ${
+            className={`w-12 h-12 rounded-full flex items-center justify-center transition-all shadow-lg ${
               isPlaying
-                ? "bg-violet-500 hover:bg-violet-400 shadow-lg shadow-violet-500/30"
-                : "bg-gradient-to-br from-violet-500 to-fuchsia-500 hover:from-violet-400 hover:to-fuchsia-400 shadow-lg shadow-violet-500/20"
+                ? "bg-violet-600 hover:bg-violet-500 text-white shadow-violet-200"
+                : "bg-gradient-to-br from-violet-500 to-fuchsia-500 hover:from-violet-400 hover:to-fuchsia-400 text-white shadow-violet-200"
             }`}
             title={isPlaying ? "Pause" : "Play"}
           >
@@ -306,7 +282,7 @@ export default function StudioLayout() {
           {/* Upload Audio Button */}
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="h-10 px-4 rounded-lg bg-gray-800 hover:bg-gray-700 flex items-center gap-2 text-sm transition-colors"
+            className="h-10 px-4 rounded-lg bg-gray-100 hover:bg-gray-200 border border-gray-200 text-gray-700 flex items-center gap-2 text-sm transition-colors"
             title="Upload Audio"
           >
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -326,7 +302,7 @@ export default function StudioLayout() {
           {/* Save Project Button */}
           <button
             onClick={handleSaveProject}
-            className="h-10 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-500 flex items-center gap-2 text-sm font-medium transition-colors"
+            className="h-10 px-4 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white flex items-center gap-2 text-sm font-medium transition-colors shadow-md shadow-emerald-200"
             title="Save Project"
           >
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -340,7 +316,7 @@ export default function StudioLayout() {
           <button
             onClick={handleLoadProject}
             disabled={isRehydrating}
-            className="h-10 px-4 rounded-lg bg-sky-600 hover:bg-sky-500 disabled:bg-gray-700 disabled:cursor-wait flex items-center gap-2 text-sm font-medium transition-colors"
+            className="h-10 px-4 rounded-lg bg-sky-500 hover:bg-sky-600 disabled:bg-gray-300 disabled:cursor-wait text-white flex items-center gap-2 text-sm font-medium transition-colors shadow-md shadow-sky-200"
             title="Load Project"
           >
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -353,11 +329,11 @@ export default function StudioLayout() {
 
         {/* BPM Control */}
         <div className="flex items-center gap-2">
-          <label className="text-xs text-gray-400 uppercase tracking-wider">BPM</label>
-          <div className="flex items-center bg-gray-800 rounded-lg overflow-hidden">
+          <label className="text-xs text-gray-400 uppercase tracking-wider font-bold">BPM</label>
+          <div className="flex items-center bg-gray-100 border border-gray-200 rounded-lg overflow-hidden">
             <button
               onClick={() => handleBpmChange(bpm - 1)}
-              className="px-2 py-1.5 text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
+              className="px-2 py-1.5 text-gray-500 hover:text-gray-900 hover:bg-gray-200 transition-colors"
             >
               −
             </button>
@@ -365,13 +341,13 @@ export default function StudioLayout() {
               type="number"
               value={bpm}
               onChange={(e) => handleBpmChange(parseInt(e.target.value) || 120)}
-              className="w-14 bg-transparent text-center text-sm font-mono focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+              className="w-14 bg-transparent text-center text-sm font-mono text-gray-900 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
               min={20}
               max={300}
             />
             <button
               onClick={() => handleBpmChange(bpm + 1)}
-              className="px-2 py-1.5 text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
+              className="px-2 py-1.5 text-gray-500 hover:text-gray-900 hover:bg-gray-200 transition-colors"
             >
               +
             </button>
@@ -382,39 +358,39 @@ export default function StudioLayout() {
       {/* ═══════ MAIN WORKSPACE ═══════ */}
       <div className="flex flex-1 overflow-hidden">
         {/* ── Left Sidebar: Track Names ── */}
-        <aside className="w-52 shrink-0 bg-gray-900 border-r border-gray-800 overflow-y-auto">
-          <div className="p-3 text-xs text-gray-500 uppercase tracking-wider border-b border-gray-800">
+        <aside className="w-52 shrink-0 bg-white border-r border-gray-200 overflow-y-auto">
+          <div className="p-3 text-xs text-gray-400 uppercase tracking-wider border-b border-gray-100 font-bold">
             Tracks
           </div>
           {tracks.length === 0 ? (
-            <div className="p-4 text-sm text-gray-600 italic">
+            <div className="p-4 text-sm text-gray-400 italic">
               No tracks yet
             </div>
           ) : (
             tracks.map((track) => (
               <div
                 key={track.trackId}
-                className="flex items-center gap-2 px-3 py-3 border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors"
+                className="flex items-center gap-2 px-3 py-3 border-b border-gray-100 hover:bg-gray-50 transition-colors"
               >
                 <div
                   className={`w-2 h-2 rounded-full ${
-                    track.isMuted ? "bg-gray-600" : "bg-emerald-400"
+                    track.isMuted ? "bg-gray-300" : "bg-emerald-400"
                   }`}
                 />
-                <span className="text-sm truncate flex-1">{track.name}</span>
+                <span className="text-sm truncate flex-1 text-gray-900">{track.name}</span>
                 {/* Mute Toggle Button */}
                 <button
                   onClick={() => toggleTrackMute(track.trackId, false)}
                   className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider transition-colors ${
                     track.isMuted
-                      ? "bg-red-500/20 text-red-400 hover:bg-red-500/30"
-                      : "bg-gray-700 text-gray-400 hover:bg-gray-600"
+                      ? "bg-red-100 text-red-500 hover:bg-red-200"
+                      : "bg-gray-100 text-gray-400 hover:bg-gray-200"
                   }`}
                   title={track.isMuted ? "Unmute" : "Mute"}
                 >
                   {track.isMuted ? "M" : "M"}
                 </button>
-                <span className="text-[10px] text-gray-600">
+                <span className="text-[10px] text-gray-400">
                   {track.regions.length} clip{track.regions.length !== 1 ? "s" : ""}
                 </span>
               </div>
@@ -423,16 +399,16 @@ export default function StudioLayout() {
         </aside>
 
         {/* ── Main Timeline Area ── */}
-        <main className="flex-1 relative overflow-x-auto overflow-y-auto bg-gray-950">
+        <main className="flex-1 relative overflow-x-auto overflow-y-auto bg-gray-50">
           {/* Timeline ruler (time markers) */}
-          <div className="sticky top-0 z-40 h-8 bg-gray-900/90 backdrop-blur border-b border-gray-800 flex items-end">
+          <div className="sticky top-0 z-40 h-8 bg-white/90 backdrop-blur border-b border-gray-200 flex items-end">
             {Array.from({ length: 60 }, (_, i) => (
               <div
                 key={i}
-                className="shrink-0 border-l border-gray-700/50 h-full flex items-end px-1"
+                className="shrink-0 border-l border-gray-200 h-full flex items-end px-1"
                 style={{ width: 50 }}
               >
-                <span className="text-[10px] text-gray-500 font-mono mb-1">{i}s</span>
+                <span className="text-[10px] text-gray-400 font-mono mb-1">{i}s</span>
               </div>
             ))}
           </div>
@@ -444,10 +420,10 @@ export default function StudioLayout() {
 
             {/* Track lanes — now using TrackRow component */}
             {tracks.length === 0 ? (
-              <div className="flex items-center justify-center h-64 text-gray-600">
+              <div className="flex items-center justify-center h-64 text-gray-400">
                 <div className="text-center">
                   <p className="text-sm mb-2">No tracks yet</p>
-                  <p className="text-xs text-gray-700">
+                  <p className="text-xs text-gray-300">
                     Click &quot;Upload&quot; to add your first audio file
                   </p>
                 </div>
@@ -462,9 +438,9 @@ export default function StudioLayout() {
       </div>
 
       {/* ═══════ STATUS BAR ═══════ */}
-      <footer className="flex items-center justify-between px-4 py-1.5 bg-gray-900 border-t border-gray-800 text-xs text-gray-500 shrink-0">
+      <footer className="flex items-center justify-between px-4 py-1.5 bg-white border-t border-gray-200 text-xs text-gray-400 shrink-0">
         <span>{tracks.length} track{tracks.length !== 1 ? "s" : ""}</span>
-        <span className={isPlaying ? "text-emerald-400" : "text-gray-500"}>
+        <span className={isPlaying ? "text-emerald-500 font-medium" : "text-gray-400"}>
           {isPlaying ? "● Playing" : "■ Stopped"}
         </span>
         <span>{bpm} BPM</span>
