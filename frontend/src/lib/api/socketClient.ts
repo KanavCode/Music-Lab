@@ -1,5 +1,9 @@
 import { Client, IMessage } from "@stomp/stompjs";
 
+const wsUrl =
+  (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080").replace(/^http/, "ws") +
+  "/ws-studio";
+
 /**
  * Singleton WebSocket client for real-time studio collaboration.
  * Connects to the Spring Boot STOMP broker at /ws-studio and
@@ -12,6 +16,7 @@ class StudioSocketClient {
   private client: Client | null = null;
   private connected = false;
   private currentProjectId: string | null = null;
+  private readonly clientId = `client-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
   private constructor() {
     // Private constructor enforces Singleton pattern (Unit 8)
@@ -39,7 +44,7 @@ class StudioSocketClient {
     this.currentProjectId = projectId;
 
     this.client = new Client({
-      brokerURL: "ws://localhost:8080/ws-studio",
+      brokerURL: wsUrl,
 
       // Reconnect automatically on disconnect
       reconnectDelay: 5000,
@@ -52,6 +57,12 @@ class StudioSocketClient {
         this.client?.subscribe(`/topic/project/${projectId}`, (message: IMessage) => {
           try {
             const payload: StudioSyncPayload = JSON.parse(message.body);
+
+            if (payload.sourceClientId && payload.sourceClientId === this.clientId) {
+              console.log("[StudioSocket] Ignored self message:", payload.actionType, payload.trackId);
+              return;
+            }
+
             console.log("[StudioSocket] Received:", payload.actionType, payload.trackId);
             onMessageReceived(payload);
           } catch (e) {
@@ -92,6 +103,7 @@ class StudioSocketClient {
       actionType,
       playheadPosition: 0,
       trackId,
+      sourceClientId: this.clientId,
     };
 
     this.client.publish({
@@ -132,6 +144,7 @@ export interface StudioSyncPayload {
   actionType: string;
   playheadPosition: number;
   trackId: string;
+  sourceClientId?: string;
 }
 
 export default StudioSocketClient;

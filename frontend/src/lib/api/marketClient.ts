@@ -1,4 +1,4 @@
-import { API_BASE_URL } from "@/lib/constants";
+import { API_BASE_URL } from "@/lib/constants/index";
 
 /**
  * Marketplace track from the Java backend.

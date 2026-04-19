@@ -48,6 +48,8 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   isLoggedIn: false,
 
   login: (email: string, _password: string) => {
+    void _password;
+
     // Mock login — always succeeds
     const user: User = {
       id: 1,
@@ -63,6 +65,8 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   },
 
   signup: (name: string, email: string, _password: string, role: User["role"]) => {
+    void _password;
+
     const user: User = {
       id: Date.now(),
       name,
