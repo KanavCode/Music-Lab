@@ -1,4 +1,4 @@
-import { API_BASE_URL } from "@/lib/constants";
+import { API_BASE_URL } from "@/lib/constants/index";
 
 /**
  * Response shape from the Java backend's POST /api/v1/audio/upload.

@@ -1,4 +1,4 @@
-import { API_BASE_URL } from "@/lib/constants";
+import { API_BASE_URL } from "@/lib/constants/index";
 
 /**
  * Payload shape matching the Java MusicProject POJO.
