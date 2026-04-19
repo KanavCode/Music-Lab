@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MusicLab WebSocket STOMP Test</title>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --border: #e5e7eb;
+      --ok: #16a34a;
+      --warn: #f59e0b;
+      --off: #ef4444;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      line-height: 1.4;
+    }
+
+    .wrap {
+      max-width: 980px;
+      margin: 32px auto;
+      padding: 0 20px 24px;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: 28px;
+      font-weight: 700;
+    }
+
+    .instructions {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 16px;
+      background: #f9fafb;
+      margin-bottom: 18px;
+    }
+
+    .instructions p {
+      margin: 6px 0;
+      font-size: 14px;
+      color: var(--text);
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 14px;
+      align-items: center;
+    }
+
+    button {
+      border: 1px solid var(--primary);
+      background: var(--primary);
+      color: #fff;
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: var(--primary-hover);
+      border-color: var(--primary-hover);
+    }
+
+    button.secondary {
+      background: #fff;
+      color: var(--text);
+      border-color: var(--border);
+    }
+
+    button.secondary:hover {
+      background: #f9fafb;
+      border-color: #d1d5db;
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 7px 12px;
+      font-size: 13px;
+      font-weight: 700;
+      margin-left: auto;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--off);
+    }
+
+    .status.connecting .dot {
+      background: var(--warn);
+    }
+
+    .status.connected .dot {
+      background: var(--ok);
+    }
+
+    .meta {
+      margin: 10px 0 18px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .log {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    thead {
+      background: #f3f4f6;
+    }
+
+    th,
+    td {
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      padding: 10px 12px;
+      font-size: 13px;
+      vertical-align: top;
+    }
+
+    th {
+      font-size: 12px;
+      letter-spacing: 0.03em;
+      color: #374151;
+      text-transform: uppercase;
+    }
+
+    tbody tr:last-child td {
+      border-bottom: none;
+    }
+
+    .mono {
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 12px;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>MusicLab WebSocket (STOMP) Test Helper</h1>
+
+    <section class="instructions">
+      <p>Step 1: Open this page in Tab 1 and Tab 2</p>
+      <p>Step 2: Click Connect in both tabs</p>
+      <p>Step 3: Click Subscribe in both tabs</p>
+      <p>Step 4: Click Send Test Event in Tab 1</p>
+      <p>Step 5: Tab 2 should show the received message in the log</p>
+    </section>
+
+    <div class="controls">
+      <button id="connectBtn">Connect</button>
+      <button id="disconnectBtn" class="secondary">Disconnect</button>
+      <button id="subscribeBtn">Subscribe to Project</button>
+      <button id="sendBtn">Send Test Mute Event</button>
+
+      <div id="status" class="status disconnected" aria-live="polite">
+        <span class="dot" aria-hidden="true"></span>
+        <span id="statusText">DISCONNECTED</span>
+      </div>
+    </div>
+
+    <div class="meta mono">
+      WS Endpoint: ws://localhost:8080/ws-studio<br />
+      Subscribe Topic: /topic/project/proj-123<br />
+      Publish Destination: /app/studio.sync
+    </div>
+
+    <section class="log">
+      <table>
+        <thead>
+          <tr>
+            <th>Timestamp</th>
+            <th>actionType</th>
+            <th>trackId</th>
+            <th>projectId</th>
+            <th>Raw / Notes</th>
+          </tr>
+        </thead>
+        <tbody id="logBody">
+          <tr>
+            <td colspan="5" class="muted">No messages yet.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@stomp/stompjs@7.0.0/bundles/stomp.umd.min.js"></script>
+  <script>
+    const WS_URL = "ws://localhost:8080/ws-studio";
+    const PROJECT_ID = "proj-123";
+
+    const statusEl = document.getElementById("status");
+    const statusTextEl = document.getElementById("statusText");
+    const logBody = document.getElementById("logBody");
+
+    const connectBtn = document.getElementById("connectBtn");
+    const disconnectBtn = document.getElementById("disconnectBtn");
+    const subscribeBtn = document.getElementById("subscribeBtn");
+    const sendBtn = document.getElementById("sendBtn");
+
+    let client = null;
+    let subscription = null;
+    let connected = false;
+
+    function setStatus(status) {
+      statusEl.classList.remove("connecting", "connected", "disconnected");
+      const normalized = String(status || "DISCONNECTED").toUpperCase();
+
+      if (normalized === "CONNECTED") {
+        statusEl.classList.add("connected");
+      } else if (normalized === "CONNECTING") {
+        statusEl.classList.add("connecting");
+      } else {
+        statusEl.classList.add("disconnected");
+      }
+
+      statusTextEl.textContent = normalized;
+    }
+
+    function now() {
+      return new Date().toLocaleTimeString();
+    }
+
+    function clearPlaceholderRow() {
+      if (logBody.children.length === 1 && logBody.children[0].children.length === 1) {
+        logBody.innerHTML = "";
+      }
+    }
+
+    function appendRow(timestamp, actionType, trackId, projectId, notes) {
+      clearPlaceholderRow();
+      const tr = document.createElement("tr");
+      tr.innerHTML =
+        "<td class='mono'>" + escapeHtml(timestamp) + "</td>" +
+        "<td class='mono'>" + escapeHtml(actionType || "-") + "</td>" +
+        "<td class='mono'>" + escapeHtml(trackId || "-") + "</td>" +
+        "<td class='mono'>" + escapeHtml(projectId || "-") + "</td>" +
+        "<td class='mono'>" + escapeHtml(notes || "") + "</td>";
+      logBody.prepend(tr);
+    }
+
+    function appendNote(note) {
+      appendRow(now(), "-", "-", "-", note);
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    function connect() {
+      if (client && (client.active || connected)) {
+        appendNote("Already connected or connecting.");
+        return;
+      }
+
+      setStatus("CONNECTING");
+
+      client = new window.StompJs.Client({
+        brokerURL: WS_URL,
+        reconnectDelay: 5000,
+        onConnect: function () {
+          connected = true;
+          setStatus("CONNECTED");
+          appendNote("Connected to STOMP broker.");
+        },
+        onDisconnect: function () {
+          connected = false;
+          setStatus("DISCONNECTED");
+          appendNote("Disconnected from STOMP broker.");
+        },
+        onWebSocketClose: function () {
+          connected = false;
+          setStatus("DISCONNECTED");
+          appendNote("WebSocket closed.");
+        },
+        onStompError: function (frame) {
+          appendNote("STOMP error: " + (frame && frame.headers ? frame.headers.message : "Unknown error"));
+        },
+        onWebSocketError: function () {
+          appendNote("WebSocket error (check backend availability).");
+        }
+      });
+
+      client.activate();
+    }
+
+    function disconnect() {
+      if (subscription) {
+        subscription.unsubscribe();
+        subscription = null;
+      }
+
+      if (client) {
+        client.deactivate();
+      }
+
+      connected = false;
+      setStatus("DISCONNECTED");
+      appendNote("Manual disconnect requested.");
+    }
+
+    function subscribeToProject() {
+      if (!client || !connected) {
+        appendNote("Connect first before subscribing.");
+        return;
+      }
+
+      if (subscription) {
+        subscription.unsubscribe();
+        subscription = null;
+      }
+
+      const topic = "/topic/project/" + PROJECT_ID;
+      subscription = client.subscribe(topic, function (message) {
+        try {
+          const payload = JSON.parse(message.body || "{}");
+          appendRow(
+            now(),
+            payload.actionType,
+            payload.trackId,
+            payload.projectId,
+            message.body
+          );
+        } catch (error) {
+          appendRow(now(), "PARSE_ERROR", "-", "-", "Invalid JSON: " + message.body);
+        }
+      });
+
+      appendNote("Subscribed to " + topic);
+    }
+
+    function sendTestEvent() {
+      if (!client || !connected) {
+        appendNote("Connect first before sending.");
+        return;
+      }
+
+      const payload = {
+        projectId: "proj-123",
+        actionType: "TRACK_MUTE",
+        playheadPosition: 0,
+        trackId: "track-test-001"
+      };
+
+      client.publish({
+        destination: "/app/studio.sync",
+        body: JSON.stringify(payload)
+      });
+
+      appendRow(now(), payload.actionType, payload.trackId, payload.projectId, "Sent test mute event");
+    }
+
+    connectBtn.addEventListener("click", connect);
+    disconnectBtn.addEventListener("click", disconnect);
+    subscribeBtn.addEventListener("click", subscribeToProject);
+    sendBtn.addEventListener("click", sendTestEvent);
+
+    setStatus("DISCONNECTED");
+  </script>
+</body>
+</html>

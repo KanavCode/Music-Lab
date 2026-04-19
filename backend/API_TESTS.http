@@ -1,0 +1,151 @@
+### ============================================================
+### MusicLab API Tests — AJT Semester Project
+### Start backend first: .\start-supabase.ps1
+### Install VS Code extension: "REST Client" by Huachao Mao
+### ============================================================
+
+@baseUrl = http://localhost:8080
+
+### ─────────────────────────────────────────────
+### Unit 6/7 — REST API | Unit 4 — JPA
+### GET all marketplace tracks from Supabase DB
+### Expected: 200 OK, JSON array of track objects
+### ─────────────────────────────────────────────
+GET {{baseUrl}}/api/v1/market/tracks
+Accept: application/json
+
+###
+
+### ─────────────────────────────────────────────
+### Unit 4 — ACID Transaction | Unit 8 — Strategy Pattern
+### POST purchase track (Standard License — base price)
+### Expected: 200 OK, transactionId in response
+### Change trackId to match actual ID from GET /tracks response
+### ─────────────────────────────────────────────
+POST {{baseUrl}}/api/v1/market/buy
+Content-Type: application/json
+
+{
+  "buyerId": 1,
+  "trackId": 1,
+  "licenseType": "standard"
+}
+
+###
+
+### ─────────────────────────────────────────────
+### Unit 4 — ACID Rollback Demo | Unit 8 — Strategy Pattern
+### POST purchase track (Exclusive License — 10x price)
+### Expected: 402 Payment Required (wallet has 5000, exclusive = 299.90)
+### This proves @Transactional rollback works
+### ─────────────────────────────────────────────
+POST {{baseUrl}}/api/v1/market/buy
+Content-Type: application/json
+
+{
+  "buyerId": 1,
+  "trackId": 1,
+  "licenseType": "exclusive"
+}
+
+###
+
+### ─────────────────────────────────────────────
+### Unit 2 — Java I/O (ObjectOutputStream serialization)
+### Unit 4 — @Transactional persistence to PostgreSQL BYTEA
+### POST save a music project (serialized to DB)
+### Expected: 200 OK, projectId confirmed in response
+### ─────────────────────────────────────────────
+POST {{baseUrl}}/api/v1/studio/save
+Content-Type: application/json
+
+{
+  "projectId": "demo-project-001",
+  "userId": "1",
+  "projectName": "AJT Demo Project",
+  "bpm": 128,
+  "tracks": [
+    {
+      "trackId": "track-001",
+      "name": "Drum Loop",
+      "volume": 0.8,
+      "isMuted": false,
+      "regions": [
+        {
+          "sampleId": "region-001",
+          "startTime": 0.0,
+          "duration": 4.0,
+          "audioFileUrl": "http://localhost:8080/api/v1/audio/stream/sample.mp3"
+        }
+      ]
+    }
+  ]
+}
+
+###
+
+### ─────────────────────────────────────────────
+### Unit 2 — Java I/O (ObjectInputStream deserialization)
+### GET load project back from DB (BYTEA → MusicProject)
+### Expected: 200 OK, full project JSON reconstructed
+### Use same projectId from the save request above
+### ─────────────────────────────────────────────
+GET {{baseUrl}}/api/v1/studio/load/demo-project-001
+Accept: application/json
+
+###
+
+### ─────────────────────────────────────────────
+### Unit 2 — Java I/O Demo (serialize only, no DB)
+### POST serialize a project to Base64 bytes
+### Expected: 200 OK, serializedData (Base64 string) in response
+### Copy the serializedData value for the deserialize test below
+### ─────────────────────────────────────────────
+POST {{baseUrl}}/api/v1/studio/serialize
+Content-Type: application/json
+
+{
+  "projectId": "serialize-test-001",
+  "userId": "1",
+  "projectName": "Serialization Test",
+  "bpm": 120,
+  "tracks": []
+}
+
+###
+
+### ─────────────────────────────────────────────
+### Unit 2 — Java I/O Demo (deserialize Base64 back to object)
+### POST deserialize — paste serializedData from above response
+### Expected: 200 OK, project object reconstructed from bytes
+### ─────────────────────────────────────────────
+POST {{baseUrl}}/api/v1/studio/deserialize
+Content-Type: application/json
+
+{
+  "serializedData": "PASTE_BASE64_FROM_SERIALIZE_RESPONSE_HERE"
+}
+
+###
+
+### ─────────────────────────────────────────────
+### Unit 2 — Java NIO File I/O
+### Unit 6/7 — REST multipart upload
+### POST upload audio file
+### NOTE: Cannot test in .http file — use the frontend UI instead
+### Or use curl: curl -F "file=@yourfile.mp3" http://localhost:8080/api/v1/audio/upload
+### Expected: 201 Created, storedFilename + streamUrl in response
+### ─────────────────────────────────────────────
+
+###
+
+### ─────────────────────────────────────────────
+### Unit 2 — Java NIO streaming
+### GET stream audio file (after upload)
+### Replace {filename} with storedFilename from upload response
+### Expected: 200 OK, audio/mpeg or audio/wav Content-Type
+### ─────────────────────────────────────────────
+GET {{baseUrl}}/api/v1/audio/stream/sample.mp3
+Accept: audio/mpeg
+
+###
