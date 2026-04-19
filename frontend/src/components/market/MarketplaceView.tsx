@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import Image from "next/image";
 import { getMarketTracks, type MarketTrack } from "@/lib/api/marketClient";
 import { useMarketStore } from "@/store/useMarketStore";
 import Portal from "@/components/Portal";
@@ -67,19 +66,10 @@ export default function MarketplaceView() {
       {/* Header */}
       <header className="flex items-center justify-between px-8 py-4 border-b border-gray-200 bg-white/80 backdrop-blur-md z-40 sticky top-0">
         <div className="flex items-center gap-3">
-          <Image
-            src="/marketplacelogo.svg.svg"
-            alt="Marketplace"
-            width={36}
-            height={36}
-            className="rounded-xl"
-          />
-          <div>
-            <h1 className="text-xl font-black tracking-tight text-gray-900">
-              Music<span className="text-violet-600">Lab</span>
-              <span className="text-gray-400 font-medium text-sm ml-2.5">Pro Market</span>
-            </h1>
-          </div>
+          <h1 className="text-xl font-black tracking-tight text-gray-900">
+            Music<span className="text-violet-600">Lab</span>
+            <span className="text-gray-400 font-medium text-sm ml-2.5">Marketplace</span>
+          </h1>
         </div>
 
         {/* Global Toolbar (Upload, Wishlist, Cart) */}

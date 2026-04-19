@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { usePathname } from "next/navigation";
 import { useMarketStore } from "@/store/useMarketStore";
 import { formatDuration } from "@/lib/api/marketClient";
 
@@ -15,10 +16,19 @@ export default function MarketAudioPlayer() {
     playPrev,
   } = useMarketStore();
 
+  const pathname = usePathname();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const progressRef = useRef<HTMLDivElement>(null);
+
+  // Check if we're on a page with the sidebar layout
+  const hasSidebar = pathname === "/" || 
+    pathname === "/marketplace" || 
+    pathname === "/explore" || 
+    pathname === "/wishlist" || 
+    pathname === "/hooks-lab" ||
+    pathname.startsWith("/market/upload");
 
   // Sync play/pause with audio element
   useEffect(() => {
@@ -68,7 +78,7 @@ export default function MarketAudioPlayer() {
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
-    <div className="fixed bottom-0 left-[240px] right-0 z-50 glass border-t border-gray-200 shadow-[0_-4px_20px_rgba(0,0,0,0.08)] animate-fade-in">
+    <div className={`fixed bottom-0 right-0 z-50 glass border-t border-gray-200 shadow-[0_-4px_20px_rgba(0,0,0,0.08)] animate-fade-in ${hasSidebar ? 'left-[240px]' : 'left-0'}`}>
       {/* Clickable progress bar — ABOVE the controls */}
       <div
         ref={progressRef}

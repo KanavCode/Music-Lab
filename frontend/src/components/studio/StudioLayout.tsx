@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import useStudioStore from "@/store/useStudioStore";
 import AudioEngine from "@/lib/audio/AudioEngine";
 import { uploadAudioFile, getStreamUrl } from "@/lib/api/audioClient";
@@ -11,70 +11,87 @@ import TrackRow from "./TrackRow";
 
 /**
  * StudioLayout — the main DAW workspace shell.
- * Grid layout: top header (transport controls), left sidebar (track names),
- * and main right area (timeline with playhead).
+ * Enhanced with drag-and-drop, metronome, volume knobs, and a realistic DAW experience.
  */
 export default function StudioLayout() {
-  const { isPlaying, isRehydrating, bpm, tracks, currentProjectId, togglePlay, setBpm, addTrack, addRegionToTrack, hydrateProject, setRehydrating, toggleTrackMute } =
+  const { isPlaying, isRehydrating, bpm, tracks, currentProjectId, togglePlay, setBpm, addTrack, addRegionToTrack, removeTrack, hydrateProject, setRehydrating, toggleTrackMute } =
     useStudioStore();
 
-  // Hidden file input ref
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [dragOverTimeline, setDragOverTimeline] = useState(false);
+  const [metronomeOn, setMetronomeOn] = useState(false);
+  const [showMixer, setShowMixer] = useState(false);
+  const [showInstruments, setShowInstruments] = useState(false);
+  const [masterVolume, setMasterVolume] = useState(80);
+  const [elapsedTime, setElapsedTime] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  /**
-   * WebSocket initialization — connects to STOMP broker and handles incoming sync events.
-   * Runs once on mount and cleans up on unmount.
-   */
+  // Timer for elapsed playback time
+  useEffect(() => {
+    if (isPlaying) {
+      timerRef.current = setInterval(() => {
+        setElapsedTime((prev) => prev + 0.1);
+      }, 100);
+    } else {
+      if (timerRef.current) clearInterval(timerRef.current);
+    }
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [isPlaying]);
+
+  // Metronome click using Web Audio API
+  useEffect(() => {
+    if (!metronomeOn || !isPlaying) return;
+    const interval = (60 / bpm) * 1000;
+    let audioCtx: AudioContext | null = null;
+    
+    const tick = () => {
+      if (!audioCtx) audioCtx = new AudioContext();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.frequency.value = 800;
+      gain.gain.value = 0.15;
+      osc.start();
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.08);
+      osc.stop(audioCtx.currentTime + 0.08);
+    };
+
+    tick();
+    const id = setInterval(tick, interval);
+    return () => {
+      clearInterval(id);
+      audioCtx?.close();
+    };
+  }, [metronomeOn, isPlaying, bpm]);
+
+  // WebSocket initialization
   useEffect(() => {
     const socket = StudioSocketClient.getInstance();
-
     socket.connect(currentProjectId, (msg) => {
-      // Route incoming sync events to the appropriate Zustand action
       if (msg.actionType === "TRACK_MUTE" && msg.trackId) {
-        // isRemoteEvent = true → prevents infinite echo
         useStudioStore.getState().toggleTrackMute(msg.trackId, true);
       }
-      // Future: handle PLAYHEAD_MOVE, BPM_CHANGE, etc.
     });
-
-    console.log(`[StudioLayout] WebSocket connected for project: ${currentProjectId}`);
-
-    return () => {
-      socket.disconnect();
-    };
+    return () => { socket.disconnect(); };
   }, [currentProjectId]);
 
-  /**
-   * Play/Pause handler.
-   */
   const handlePlayPause = useCallback(async () => {
     const engine = AudioEngine.getInstance();
-
-    if (!engine.isInitialized()) {
-      await engine.initialize();
-    }
-
-    if (isPlaying) {
-      engine.stop();
-    } else {
-      engine.play();
-    }
-
+    if (!engine.isInitialized()) await engine.initialize();
+    if (isPlaying) { engine.pause(); } else { engine.play(); }
     togglePlay();
   }, [isPlaying, togglePlay]);
 
-  /**
-   * Stop handler — resets playhead to beginning.
-   */
   const handleStop = useCallback(() => {
     const engine = AudioEngine.getInstance();
     engine.stop();
     useStudioStore.getState().setPlaying(false);
+    setElapsedTime(0);
   }, []);
 
-  /**
-   * BPM change handler — updates both Zustand and Tone.Transport.
-   */
   const handleBpmChange = useCallback(
     (newBpm: number) => {
       const clampedBpm = Math.max(20, Math.min(300, newBpm));
@@ -84,330 +101,336 @@ export default function StudioLayout() {
     [setBpm]
   );
 
-  /**
-   * File upload handler.
-   */
-  const handleFileUpload = useCallback(
-    async (event: React.ChangeEvent<HTMLInputElement>) => {
-      const file = event.target.files?.[0];
-      if (!file) return;
-
+  // Unified file handler for both click-upload and drag-drop
+  const processAudioFile = useCallback(
+    async (file: File) => {
       try {
         const engine = AudioEngine.getInstance();
-        if (!engine.isInitialized()) {
-          await engine.initialize();
-        }
+        if (!engine.isInitialized()) await engine.initialize();
 
         const uploadResult = await uploadAudioFile(file);
         const streamUrl = getStreamUrl(uploadResult.streamUrl);
-
         const regionId = `region-${Date.now()}`;
-        const startTime = 0;
-        const duration = 5;
-
         const currentTracks = useStudioStore.getState().tracks;
         let targetTrackId: string;
 
         if (currentTracks.length === 0) {
           targetTrackId = `track-${Date.now()}`;
-          addTrack({
-            trackId: targetTrackId,
-            name: "Track 1",
-            volume: 0.8,
-            isMuted: false,
-            regions: [],
-          });
+          addTrack({ trackId: targetTrackId, name: file.name.replace(/\.[^/.]+$/, ""), volume: 0.8, isMuted: false, regions: [] });
         } else {
           targetTrackId = currentTracks[0].trackId;
         }
 
-        addRegionToTrack(targetTrackId, {
-          sampleId: regionId,
-          startTime,
-          duration,
-          audioFileUrl: streamUrl,
-        });
-
-        await engine.loadRegion(regionId, streamUrl, startTime);
-        console.log(`[StudioLayout] Audio uploaded and loaded: ${uploadResult.storedFilename}`);
-      } catch (error) {
-        console.error("[StudioLayout] Upload failed:", error);
-        alert("Failed to upload audio file. Ensure the backend is running.");
-      }
-
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
+        addRegionToTrack(targetTrackId, { sampleId: regionId, startTime: 0, duration: 5, audioFileUrl: streamUrl });
+        await engine.loadRegion(regionId, streamUrl, 0);
+      } catch {
+        alert("Upload failed. Ensure the backend is running.");
       }
     },
     [addTrack, addRegionToTrack]
   );
 
-  /**
-   * Save Project handler.
-   */
-  const handleSaveProject = useCallback(async () => {
-    const state = useStudioStore.getState();
+  const handleFileUpload = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      await processAudioFile(file);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    },
+    [processAudioFile]
+  );
 
-    const payload = {
-      projectId: `project-${Date.now()}`,
-      userId: "1",
-      projectName: "My Music Project",
-      bpm: state.bpm,
-      tracks: state.tracks.map((track) => ({
-        trackId: track.trackId,
-        name: track.name,
-        volume: track.volume,
-        isMuted: track.isMuted,
-        regions: track.regions.map((region) => ({
-          sampleId: region.sampleId,
-          startTime: region.startTime,
-          duration: region.duration,
-          audioFileUrl: region.audioFileUrl,
-        })),
-      })),
-    };
-
-    try {
-      await saveProject(payload);
-      alert("Project Saved!");
-      console.log("[StudioLayout] Project saved successfully", payload.projectId);
-    } catch (error) {
-      console.error("[StudioLayout] Save failed:", error);
-      alert("Failed to save project. Ensure the backend is running.");
-    }
+  // Drag and drop handlers for timeline
+  const handleTimelineDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverTimeline(true);
   }, []);
 
-  /**
-   * Load Project handler.
-   */
+  const handleTimelineDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOverTimeline(false);
+  }, []);
+
+  const handleTimelineDrop = useCallback(
+    async (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragOverTimeline(false);
+      const files = e.dataTransfer.files;
+      if (files.length > 0 && files[0].type.startsWith("audio/")) {
+        await processAudioFile(files[0]);
+      } else {
+        alert("Please drop an audio file (MP3, WAV, etc.)");
+      }
+    },
+    [processAudioFile]
+  );
+
+  const handleSaveProject = useCallback(async () => {
+    const state = useStudioStore.getState();
+    try {
+      await saveProject({
+        projectId: `project-${Date.now()}`,
+        userId: "1",
+        projectName: "My Music Project",
+        bpm: state.bpm,
+        tracks: state.tracks.map((track) => ({
+          trackId: track.trackId, name: track.name, volume: track.volume, isMuted: track.isMuted,
+          regions: track.regions.map((r) => ({ sampleId: r.sampleId, startTime: r.startTime, duration: r.duration, audioFileUrl: r.audioFileUrl })),
+        })),
+      });
+      alert("Project Saved!");
+    } catch { alert("Failed to save project."); }
+  }, []);
+
   const handleLoadProject = useCallback(async () => {
     const projectId = prompt("Enter Project ID to load:");
     if (!projectId) return;
-
     try {
       setRehydrating(true);
-
       const engine = AudioEngine.getInstance();
-      if (!engine.isInitialized()) {
-        await engine.initialize();
-      }
-
+      if (!engine.isInitialized()) await engine.initialize();
       engine.disposeAll();
-
       const data = await loadProject(projectId);
-      console.log("[StudioLayout] Project loaded from backend:", data.projectId);
-
-      const hydratedTracks = (data.tracks || []).map((t) => ({
-        trackId: t.trackId,
-        name: t.name,
-        volume: t.volume,
-        isMuted: t.isMuted,
-        regions: (t.regions || []).map((r) => ({
-          sampleId: r.sampleId,
-          startTime: r.startTime,
-          duration: r.duration,
-          audioFileUrl: r.audioFileUrl,
-        })),
+      const hydratedTracks = (data.tracks || []).map((t: { trackId: string; name: string; volume: number; isMuted: boolean; regions: { sampleId: string; startTime: number; duration: number; audioFileUrl: string; }[] }) => ({
+        trackId: t.trackId, name: t.name, volume: t.volume, isMuted: t.isMuted,
+        regions: (t.regions || []).map((r: { sampleId: string; startTime: number; duration: number; audioFileUrl: string }) => ({ sampleId: r.sampleId, startTime: r.startTime, duration: r.duration, audioFileUrl: r.audioFileUrl })),
       }));
-
       hydrateProject(data.bpm, hydratedTracks);
       engine.setBpm(data.bpm);
-
       for (const track of hydratedTracks) {
         for (const region of track.regions) {
           await engine.loadRegion(region.sampleId, region.audioFileUrl, region.startTime);
         }
       }
-
-      console.log(`[StudioLayout] Rehydration complete. ${engine.getLoadedRegionCount()} regions loaded.`);
-      alert("Project loaded successfully!");
-    } catch (error) {
-      console.error("[StudioLayout] Load failed:", error);
-      alert("Failed to load project. Ensure the backend is running and the project ID is correct.");
-    } finally {
-      setRehydrating(false);
-    }
+      alert("Project loaded!");
+    } catch { alert("Failed to load project."); } finally { setRehydrating(false); }
   }, [hydrateProject, setRehydrating]);
+
+  // Add new empty track
+  const handleAddTrack = useCallback(() => {
+    const id = `track-${Date.now()}`;
+    const num = tracks.length + 1;
+    addTrack({ trackId: id, name: `Track ${num}`, volume: 0.8, isMuted: false, regions: [] });
+  }, [tracks.length, addTrack]);
+
+  // Format time for display
+  const formatTime = (t: number) => {
+    const mins = Math.floor(t / 60);
+    const secs = Math.floor(t % 60);
+    const ms = Math.floor((t % 1) * 10);
+    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}.${ms}`;
+  };
 
   return (
     <div className="flex flex-col h-full bg-[#f8f9fc] text-gray-900 font-sans">
       {/* ═══════ HEADER — Transport Controls ═══════ */}
-      <header className="flex items-center justify-between px-6 py-3 bg-white border-b border-gray-200 shrink-0">
-        {/* Logo / Title */}
+      <header className="flex items-center justify-between px-5 py-2.5 bg-white border-b border-gray-200 shrink-0">
+        {/* Left: Logo + project actions */}
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-sm font-bold text-white">
-            M
+          <div className="flex items-center gap-2 mr-4">
+            <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-xs font-bold text-white">M</div>
+            <h1 className="text-base font-semibold tracking-tight text-gray-900">
+              Music<span className="text-violet-600">Lab</span>
+              <span className="text-gray-400 text-sm ml-1 font-normal">Studio</span>
+            </h1>
           </div>
-          <h1 className="text-lg font-semibold tracking-tight text-gray-900">
-            Music<span className="text-violet-600">Lab</span>
-            <span className="text-gray-400 text-sm ml-1.5 font-normal">Studio</span>
-          </h1>
+
+          {/* Project Actions */}
+          <div className="flex items-center gap-1.5">
+            <button onClick={handleSaveProject}
+              className="h-8 px-3 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white flex items-center gap-1.5 text-xs font-medium transition-colors"
+              title="Save">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M13 16H3a2 2 0 01-2-2V2a2 2 0 012-2h8l4 4v10a2 2 0 01-2 2z" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              Save
+            </button>
+            <button onClick={handleLoadProject} disabled={isRehydrating}
+              className="h-8 px-3 rounded-lg bg-sky-500 hover:bg-sky-600 disabled:bg-gray-300 text-white flex items-center gap-1.5 text-xs font-medium transition-colors"
+              title="Load">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M2 12v2a1 1 0 001 1h10a1 1 0 001-1v-2M8 10V2M4 6l4 4 4-4" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              {isRehydrating ? "..." : "Load"}
+            </button>
+          </div>
         </div>
 
-        {/* Transport Controls */}
-        <div className="flex items-center gap-3">
-          {/* Stop Button */}
-          <button
-            onClick={handleStop}
-            className="w-10 h-10 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 flex items-center justify-center transition-colors border border-gray-200"
-            title="Stop"
-          >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
-              <rect width="14" height="14" rx="2" />
-            </svg>
+        {/* Center: Transport */}
+        <div className="flex items-center gap-2">
+          {/* Time Display */}
+          <div className="bg-gray-900 text-emerald-400 px-3 py-1.5 rounded-lg font-mono text-sm tracking-wider mr-2 min-w-[90px] text-center shadow-inner">
+            {formatTime(elapsedTime)}
+          </div>
+
+          <button onClick={handleStop}
+            className="w-9 h-9 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 flex items-center justify-center transition-colors border border-gray-200" title="Stop">
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="currentColor"><rect width="14" height="14" rx="2" /></svg>
           </button>
 
-          {/* Play / Pause Button */}
-          <button
-            onClick={handlePlayPause}
-            className={`w-12 h-12 rounded-full flex items-center justify-center transition-all shadow-lg ${
-              isPlaying
-                ? "bg-violet-600 hover:bg-violet-500 text-white shadow-violet-200"
+          <button onClick={handlePlayPause}
+            className={`w-11 h-11 rounded-full flex items-center justify-center transition-all shadow-lg ${
+              isPlaying ? "bg-violet-600 hover:bg-violet-500 text-white shadow-violet-200"
                 : "bg-gradient-to-br from-violet-500 to-fuchsia-500 hover:from-violet-400 hover:to-fuchsia-400 text-white shadow-violet-200"
             }`}
-            title={isPlaying ? "Pause" : "Play"}
-          >
+            title={isPlaying ? "Pause" : "Play"}>
             {isPlaying ? (
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-                <rect x="2" y="1" width="4" height="14" rx="1" />
-                <rect x="10" y="1" width="4" height="14" rx="1" />
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                <rect x="2" y="1" width="4" height="14" rx="1" /><rect x="10" y="1" width="4" height="14" rx="1" />
               </svg>
             ) : (
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" className="ml-0.5">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" className="ml-0.5">
                 <path d="M3 1.7v12.6a1 1 0 001.5.87l10-6.3a1 1 0 000-1.74l-10-6.3A1 1 0 003 1.7z" />
               </svg>
             )}
           </button>
 
-          {/* Upload Audio Button */}
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="h-10 px-4 rounded-lg bg-gray-100 hover:bg-gray-200 border border-gray-200 text-gray-700 flex items-center gap-2 text-sm transition-colors"
-            title="Upload Audio"
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path d="M8 2v8M4 6l4-4 4 4" strokeLinecap="round" strokeLinejoin="round" />
-              <path d="M2 10v3a1 1 0 001 1h10a1 1 0 001-1v-3" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-            Upload
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="audio/*"
-            className="hidden"
-            onChange={handleFileUpload}
-          />
-
-          {/* Save Project Button */}
-          <button
-            onClick={handleSaveProject}
-            className="h-10 px-4 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white flex items-center gap-2 text-sm font-medium transition-colors shadow-md shadow-emerald-200"
-            title="Save Project"
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path d="M13 16H3a2 2 0 01-2-2V2a2 2 0 012-2h8l4 4v10a2 2 0 01-2 2z" strokeLinecap="round" strokeLinejoin="round" />
-              <path d="M11 16v-5H5v5M5 0v4h4" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-            Save
-          </button>
-
-          {/* Load Project Button */}
-          <button
-            onClick={handleLoadProject}
-            disabled={isRehydrating}
-            className="h-10 px-4 rounded-lg bg-sky-500 hover:bg-sky-600 disabled:bg-gray-300 disabled:cursor-wait text-white flex items-center gap-2 text-sm font-medium transition-colors shadow-md shadow-sky-200"
-            title="Load Project"
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path d="M2 12v2a1 1 0 001 1h10a1 1 0 001-1v-2" strokeLinecap="round" strokeLinejoin="round" />
-              <path d="M8 10V2M4 6l4 4 4-4" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-            {isRehydrating ? "Loading..." : "Load"}
+          {/* Record (decorative) */}
+          <button className="w-9 h-9 rounded-lg bg-gray-100 hover:bg-red-50 text-gray-400 hover:text-red-500 flex items-center justify-center transition-colors border border-gray-200" title="Record">
+            <div className="w-3 h-3 rounded-full bg-current" />
           </button>
         </div>
 
-        {/* BPM Control */}
-        <div className="flex items-center gap-2">
-          <label className="text-xs text-gray-400 uppercase tracking-wider font-bold">BPM</label>
-          <div className="flex items-center bg-gray-100 border border-gray-200 rounded-lg overflow-hidden">
-            <button
-              onClick={() => handleBpmChange(bpm - 1)}
-              className="px-2 py-1.5 text-gray-500 hover:text-gray-900 hover:bg-gray-200 transition-colors"
-            >
-              −
-            </button>
-            <input
-              type="number"
-              value={bpm}
-              onChange={(e) => handleBpmChange(parseInt(e.target.value) || 120)}
-              className="w-14 bg-transparent text-center text-sm font-mono text-gray-900 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-              min={20}
-              max={300}
-            />
-            <button
-              onClick={() => handleBpmChange(bpm + 1)}
-              className="px-2 py-1.5 text-gray-500 hover:text-gray-900 hover:bg-gray-200 transition-colors"
-            >
-              +
-            </button>
+        {/* Right: BPM, Metronome, Upload, Mixer */}
+        <div className="flex items-center gap-3">
+
+          {/* Metronome Toggle */}
+          <button onClick={() => setMetronomeOn(!metronomeOn)}
+            className={`h-8 px-3 rounded-lg border text-xs font-bold transition-all ${
+              metronomeOn ? "bg-violet-50 border-violet-300 text-violet-600" : "bg-gray-50 border-gray-200 text-gray-400 hover:text-gray-600"
+            }`}
+            title="Metronome">
+            <span className="tracking-wider">♩</span> {metronomeOn ? "ON" : "OFF"}
+          </button>
+
+          {/* BPM Control */}
+          <div className="flex items-center gap-1.5">
+            <label className="text-[10px] text-gray-400 uppercase tracking-wider font-bold">BPM</label>
+            <div className="flex items-center bg-gray-100 border border-gray-200 rounded-lg overflow-hidden">
+              <button onClick={() => handleBpmChange(bpm - 1)} className="px-2 py-1 text-gray-500 hover:text-gray-900 hover:bg-gray-200 transition-colors text-sm">−</button>
+              <input type="number" value={bpm}
+                onChange={(e) => handleBpmChange(parseInt(e.target.value) || 120)}
+                className="w-12 bg-transparent text-center text-xs font-mono text-gray-900 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                min={20} max={300} />
+              <button onClick={() => handleBpmChange(bpm + 1)} className="px-2 py-1 text-gray-500 hover:text-gray-900 hover:bg-gray-200 transition-colors text-sm">+</button>
+            </div>
           </div>
+
+          {/* Upload Audio */}
+          <button onClick={() => fileInputRef.current?.click()}
+            className="h-8 px-3 rounded-lg bg-gray-100 hover:bg-gray-200 border border-gray-200 text-gray-700 flex items-center gap-1.5 text-xs transition-colors" title="Upload Audio">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M8 2v8M4 6l4-4 4 4" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M2 10v3a1 1 0 001 1h10a1 1 0 001-1v-3" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            Import
+          </button>
+          <input ref={fileInputRef} type="file" accept="audio/*" className="hidden" onChange={handleFileUpload} />
+
+          {/* Instruments Toggle */}
+          <button onClick={() => setShowInstruments(!showInstruments)}
+            className={`h-8 px-3 rounded-lg border text-xs font-medium transition-all ${
+              showInstruments ? "bg-amber-50 border-amber-300 text-amber-600" : "bg-gray-50 border-gray-200 text-gray-500 hover:text-gray-700"
+            }`}
+            title="Instruments">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" />
+            </svg>
+          </button>
+
+          {/* Mixer Toggle */}
+          <button onClick={() => setShowMixer(!showMixer)}
+            className={`h-8 px-3 rounded-lg border text-xs font-medium transition-all ${
+              showMixer ? "bg-violet-50 border-violet-300 text-violet-600" : "bg-gray-50 border-gray-200 text-gray-500 hover:text-gray-700"
+            }`}
+            title="Mixer">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" /><line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" />
+              <line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" />
+              <line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" />
+            </svg>
+          </button>
         </div>
       </header>
 
       {/* ═══════ MAIN WORKSPACE ═══════ */}
       <div className="flex flex-1 overflow-hidden">
-        {/* ── Left Sidebar: Track Names ── */}
-        <aside className="w-52 shrink-0 bg-white border-r border-gray-200 overflow-y-auto">
-          <div className="p-3 text-xs text-gray-400 uppercase tracking-wider border-b border-gray-100 font-bold">
+        {/* ── Left Sidebar: Track List ── */}
+        <aside className="w-52 shrink-0 bg-white border-r border-gray-200 overflow-y-auto flex flex-col">
+          <div className="p-3 text-[10px] text-gray-400 uppercase tracking-widest border-b border-gray-100 font-bold flex items-center justify-between">
             Tracks
+            <button
+              onClick={handleAddTrack}
+              className="w-5 h-5 rounded bg-violet-100 text-violet-600 flex items-center justify-center hover:bg-violet-200 transition-colors"
+              title="Add Track"
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
           </div>
           {tracks.length === 0 ? (
-            <div className="p-4 text-sm text-gray-400 italic">
-              No tracks yet
+            <div className="flex-1 flex flex-col items-center justify-center text-center p-6 text-gray-400">
+              <div className="w-14 h-14 rounded-2xl bg-gray-100 flex items-center justify-center mb-3">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-gray-300">
+                  <path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" />
+                </svg>
+              </div>
+              <p className="text-xs font-medium mb-1">No tracks yet</p>
+              <p className="text-[10px] text-gray-300 leading-relaxed">Drop audio files on the timeline or click Import</p>
             </div>
           ) : (
-            tracks.map((track) => (
-              <div
-                key={track.trackId}
-                className="flex items-center gap-2 px-3 py-3 border-b border-gray-100 hover:bg-gray-50 transition-colors"
-              >
-                <div
-                  className={`w-2 h-2 rounded-full ${
-                    track.isMuted ? "bg-gray-300" : "bg-emerald-400"
-                  }`}
-                />
-                <span className="text-sm truncate flex-1 text-gray-900">{track.name}</span>
-                {/* Mute Toggle Button */}
-                <button
-                  onClick={() => toggleTrackMute(track.trackId, false)}
-                  className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider transition-colors ${
-                    track.isMuted
-                      ? "bg-red-100 text-red-500 hover:bg-red-200"
-                      : "bg-gray-100 text-gray-400 hover:bg-gray-200"
-                  }`}
-                  title={track.isMuted ? "Unmute" : "Mute"}
-                >
-                  {track.isMuted ? "M" : "M"}
-                </button>
-                <span className="text-[10px] text-gray-400">
-                  {track.regions.length} clip{track.regions.length !== 1 ? "s" : ""}
-                </span>
-              </div>
-            ))
+            <div className="flex-1">
+              {tracks.map((track, i) => (
+                <div key={track.trackId}
+                  className="flex items-center gap-2 px-3 py-2.5 border-b border-gray-100 hover:bg-gray-50 transition-colors group">
+                  <div className={`w-1.5 h-8 rounded-full ${track.isMuted ? "bg-gray-300" : ["bg-violet-400","bg-emerald-400","bg-amber-400","bg-rose-400","bg-sky-400"][i % 5]}`} />
+                  <div className="flex-1 min-w-0">
+                    <span className="text-xs font-medium text-gray-800 truncate block">{track.name}</span>
+                    <span className="text-[10px] text-gray-400">{track.regions.length} clip{track.regions.length !== 1 ? "s" : ""}</span>
+                  </div>
+                  {/* Mute */}
+                  <button onClick={() => toggleTrackMute(track.trackId, false)}
+                    className={`w-6 h-5 rounded text-[9px] font-bold uppercase transition-colors ${
+                      track.isMuted ? "bg-red-100 text-red-500" : "bg-gray-100 text-gray-400 hover:bg-gray-200"
+                    }`} title={track.isMuted ? "Unmute" : "Mute"}>
+                    M
+                  </button>
+                  {/* Solo (decorative) */}
+                  <button className="w-6 h-5 rounded text-[9px] font-bold bg-gray-100 text-gray-400 hover:bg-amber-100 hover:text-amber-500 transition-colors" title="Solo">S</button>
+                  {/* Delete Track */}
+                  <button onClick={() => removeTrack(track.trackId)}
+                    className="w-6 h-5 rounded text-[9px] font-bold bg-gray-100 text-gray-400 opacity-0 group-hover:opacity-100 hover:bg-red-100 hover:text-red-500 transition-all"
+                    title="Delete Track">
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
           )}
+
+          {/* Master Volume */}
+          <div className="p-3 border-t border-gray-100">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Master</span>
+              <span className="text-[10px] text-gray-500 font-mono">{masterVolume}%</span>
+            </div>
+            <input type="range" min="0" max="100" value={masterVolume} onChange={(e) => setMasterVolume(Number(e.target.value))}
+              className="w-full h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer accent-violet-500
+                [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-violet-500 [&::-webkit-slider-thumb]:shadow-md" />
+          </div>
         </aside>
 
         {/* ── Main Timeline Area ── */}
-        <main className="flex-1 relative overflow-x-auto overflow-y-auto bg-gray-50">
-          {/* Timeline ruler (time markers) */}
+        <main
+          className={`flex-1 relative overflow-x-auto overflow-y-auto transition-colors ${dragOverTimeline ? "bg-violet-50 ring-2 ring-inset ring-violet-300" : "bg-gray-50"}`}
+          onDragOver={handleTimelineDragOver}
+          onDragLeave={handleTimelineDragLeave}
+          onDrop={handleTimelineDrop}
+        >
+          {/* Timeline ruler */}
           <div className="sticky top-0 z-40 h-8 bg-white/90 backdrop-blur border-b border-gray-200 flex items-end">
             {Array.from({ length: 60 }, (_, i) => (
-              <div
-                key={i}
-                className="shrink-0 border-l border-gray-200 h-full flex items-end px-1"
-                style={{ width: 50 }}
-              >
+              <div key={i} className="shrink-0 border-l border-gray-200 h-full flex items-end px-1" style={{ width: 50 }}>
                 <span className="text-[10px] text-gray-400 font-mono mb-1">{i}s</span>
               </div>
             ))}
@@ -415,17 +438,36 @@ export default function StudioLayout() {
 
           {/* Track lanes + Playhead */}
           <div className="relative min-h-full" style={{ minWidth: 60 * 50 }}>
-            {/* Playhead — animated via rAF, not React state */}
             <Playhead />
 
-            {/* Track lanes — now using TrackRow component */}
             {tracks.length === 0 ? (
-              <div className="flex items-center justify-center h-64 text-gray-400">
+              <div className="flex items-center justify-center h-80 text-gray-400">
                 <div className="text-center">
-                  <p className="text-sm mb-2">No tracks yet</p>
-                  <p className="text-xs text-gray-300">
-                    Click &quot;Upload&quot; to add your first audio file
-                  </p>
+                  {dragOverTimeline ? (
+                    <>
+                      <div className="w-20 h-20 rounded-2xl bg-violet-100 flex items-center justify-center mx-auto mb-4 animate-pulse">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-violet-500"><path d="M12 2v20M2 12h20" /></svg>
+                      </div>
+                      <p className="text-sm font-bold text-violet-600 mb-1">Drop audio file here</p>
+                      <p className="text-xs text-violet-400">MP3, WAV, OGG, FLAC supported</p>
+                    </>
+                  ) : (
+                    <>
+                      <div className="w-20 h-20 rounded-2xl bg-gray-100 flex items-center justify-center mx-auto mb-4">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-gray-300">
+                          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" />
+                        </svg>
+                      </div>
+                      <p className="text-sm font-medium mb-1">Drop audio files here</p>
+                      <p className="text-xs text-gray-300 mb-4">or click Import to add your first audio file</p>
+                      <button
+                        onClick={() => fileInputRef.current?.click()}
+                        className="px-5 py-2 bg-violet-600 text-white text-xs font-bold rounded-lg hover:bg-violet-700 transition-colors shadow-md shadow-violet-200"
+                      >
+                        Browse Files
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             ) : (
@@ -435,15 +477,93 @@ export default function StudioLayout() {
             )}
           </div>
         </main>
+
+        {/* ── Mixer Panel (toggle) ── */}
+        {showMixer && (
+          <aside className="w-56 shrink-0 bg-white border-l border-gray-200 overflow-y-auto p-4">
+            <div className="text-[10px] text-gray-400 uppercase tracking-widest font-bold mb-4">Mixer</div>
+            {tracks.length === 0 ? (
+              <p className="text-xs text-gray-400 italic">No tracks</p>
+            ) : (
+              <div className="space-y-4">
+                {tracks.map((track, i) => (
+                  <div key={track.trackId} className="bg-gray-50 rounded-xl p-3 border border-gray-100">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className={`w-2 h-2 rounded-full ${["bg-violet-400","bg-emerald-400","bg-amber-400","bg-rose-400","bg-sky-400"][i % 5]}`} />
+                      <span className="text-xs font-medium text-gray-800 truncate">{track.name}</span>
+                    </div>
+                    {/* Volume */}
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-[9px] text-gray-400 w-6">Vol</span>
+                      <input type="range" min="0" max="100" defaultValue={track.volume * 100}
+                        className="flex-1 h-1 bg-gray-200 rounded-full appearance-none cursor-pointer accent-violet-500
+                          [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-violet-500" />
+                    </div>
+                    {/* Pan */}
+                    <div className="flex items-center gap-2">
+                      <span className="text-[9px] text-gray-400 w-6">Pan</span>
+                      <input type="range" min="-100" max="100" defaultValue={0}
+                        className="flex-1 h-1 bg-gray-200 rounded-full appearance-none cursor-pointer accent-gray-500
+                          [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-gray-500" />
+                      <span className="text-[9px] text-gray-400 w-4 text-right">C</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </aside>
+        )}
+
+        {/* ── Instruments Panel (toggle) ── */}
+        {showInstruments && (
+          <aside className="w-56 shrink-0 bg-white border-l border-gray-200 overflow-y-auto p-4">
+            <div className="text-[10px] text-gray-400 uppercase tracking-widest font-bold mb-4">Instruments</div>
+            <p className="text-[10px] text-gray-400 mb-3 leading-relaxed">Click an instrument to add it as a new track.</p>
+            <div className="space-y-2">
+              {[
+                { name: "Grand Piano", icon: "🎹", color: "bg-violet-100 text-violet-600 border-violet-200" },
+                { name: "Acoustic Drums", icon: "🥁", color: "bg-amber-100 text-amber-600 border-amber-200" },
+                { name: "Synth Bass", icon: "🎛️", color: "bg-emerald-100 text-emerald-600 border-emerald-200" },
+                { name: "Strings Ensemble", icon: "🎻", color: "bg-rose-100 text-rose-600 border-rose-200" },
+                { name: "Electric Guitar", icon: "🎸", color: "bg-sky-100 text-sky-600 border-sky-200" },
+                { name: "Brass Section", icon: "🎺", color: "bg-orange-100 text-orange-600 border-orange-200" },
+                { name: "Choir Pad", icon: "🎤", color: "bg-pink-100 text-pink-600 border-pink-200" },
+                { name: "808 Sub Bass", icon: "💥", color: "bg-gray-100 text-gray-600 border-gray-200" },
+              ].map((inst) => (
+                <button
+                  key={inst.name}
+                  onClick={() => {
+                    const id = `track-${Date.now()}`;
+                    addTrack({ trackId: id, name: inst.name, volume: 0.8, isMuted: false, regions: [] });
+                  }}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left hover:shadow-md hover:-translate-y-0.5 transition-all ${inst.color}`}
+                >
+                  <span className="text-lg">{inst.icon}</span>
+                  <div>
+                    <span className="text-xs font-bold block">{inst.name}</span>
+                    <span className="text-[9px] opacity-60">Virtual Instrument</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </aside>
+        )}
       </div>
 
       {/* ═══════ STATUS BAR ═══════ */}
-      <footer className="flex items-center justify-between px-4 py-1.5 bg-white border-t border-gray-200 text-xs text-gray-400 shrink-0">
-        <span>{tracks.length} track{tracks.length !== 1 ? "s" : ""}</span>
-        <span className={isPlaying ? "text-emerald-500 font-medium" : "text-gray-400"}>
-          {isPlaying ? "● Playing" : "■ Stopped"}
+      <footer className="flex items-center justify-between px-4 py-1.5 bg-white border-t border-gray-200 text-[11px] text-gray-400 shrink-0">
+        <div className="flex items-center gap-4">
+          <span>{tracks.length} track{tracks.length !== 1 ? "s" : ""}</span>
+          <span>{tracks.reduce((sum, t) => sum + t.regions.length, 0)} clip{tracks.reduce((sum, t) => sum + t.regions.length, 0) !== 1 ? "s" : ""}</span>
+        </div>
+        <span className={`flex items-center gap-1.5 ${isPlaying ? "text-emerald-500 font-medium" : "text-gray-400"}`}>
+          <span className={`w-1.5 h-1.5 rounded-full ${isPlaying ? "bg-emerald-500 animate-pulse" : "bg-gray-300"}`} />
+          {isPlaying ? "Playing" : "Stopped"}
         </span>
-        <span>{bpm} BPM</span>
+        <div className="flex items-center gap-4">
+          <span>{bpm} BPM</span>
+          <span>Master: {masterVolume}%</span>
+        </div>
       </footer>
     </div>
   );

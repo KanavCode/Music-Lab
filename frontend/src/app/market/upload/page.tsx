@@ -1,9 +1,10 @@
 "use client";
 
 import { useState, useRef } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 export default function MarketUploadPage() {
+  const router = useRouter();
   const [dragActive, setDragActive] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [coverImage, setCoverImage] = useState<File | null>(null);
@@ -50,9 +51,9 @@ export default function MarketUploadPage() {
   return (
     <div className="min-h-screen bg-[#f8f9fc] text-gray-900 font-sans flex flex-col">
       <header className="px-8 py-5 border-b border-gray-200 bg-white/80 backdrop-blur-md sticky top-0 z-40 flex items-center gap-4">
-        <Link href="/marketplace" className="w-10 h-10 rounded-full flex items-center justify-center bg-gray-100 border border-gray-200 hover:border-violet-400 transition-colors">
+        <button onClick={() => router.back()} className="w-10 h-10 rounded-full flex items-center justify-center bg-gray-100 border border-gray-200 hover:border-violet-400 transition-colors">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 18l-6-6 6-6"/></svg>
-        </Link>
+        </button>
         <h1 className="text-lg font-bold text-gray-900">Upload to Marketplace</h1>
       </header>
 

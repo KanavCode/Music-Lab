@@ -43,6 +43,7 @@ interface StudioActions {
   addTrack: (track: AudioTrack) => void;
   updateTrack: (trackId: string, updates: Partial<AudioTrack>) => void;
   addRegionToTrack: (trackId: string, region: AudioRegion) => void;
+  removeTrack: (trackId: string) => void;
   hydrateProject: (bpm: number, tracks: AudioTrack[]) => void;
   setCurrentProjectId: (id: string) => void;
   toggleTrackMute: (trackId: string, isRemoteEvent: boolean) => void;
@@ -86,6 +87,11 @@ const useStudioStore = create<StudioStore>((set) => ({
           ? { ...t, regions: [...t.regions, region] }
           : t
       ),
+    })),
+
+  removeTrack: (trackId) =>
+    set((state) => ({
+      tracks: state.tracks.filter((t) => t.trackId !== trackId),
     })),
 
   hydrateProject: (bpm, tracks) =>
