@@ -4,6 +4,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuthStore } from "@/store/useAuthStore";
+import { useMarketStore } from "@/store/useMarketStore";
 import { useState } from "react";
 
 const NAV_ITEMS = [
@@ -67,7 +68,10 @@ export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const { user, isLoggedIn, logout } = useAuthStore();
+  const { wishlist } = useMarketStore();
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authAction, setAuthAction] = useState("");
 
   const handleLogout = () => {
     setShowLogoutConfirm(true);
@@ -114,10 +118,19 @@ export default function Sidebar() {
                 item.href === "/"
                   ? pathname === "/"
                   : pathname.startsWith(item.href);
+              const needsAuth = item.href === "/market/upload" || item.href === "/wishlist";
+              const handleClick = (e: React.MouseEvent) => {
+                if (needsAuth && !isLoggedIn) {
+                  e.preventDefault();
+                  setAuthAction(item.label === "Upload" ? "upload tracks" : "access your library");
+                  setShowAuthModal(true);
+                }
+              };
               return (
                 <li key={item.href}>
                   <Link
                     href={item.href}
+                    onClick={handleClick}
                     className={`sidebar-link flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
                       isActive
                         ? "active bg-violet-50 text-violet-700"
@@ -128,6 +141,11 @@ export default function Sidebar() {
                       {item.icon}
                     </span>
                     {item.label}
+                    {item.href === "/wishlist" && wishlist.length > 0 && (
+                      <span className="ml-auto bg-pink-500 text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full">
+                        {wishlist.length}
+                      </span>
+                    )}
                   </Link>
                 </li>
               );
@@ -196,6 +214,25 @@ export default function Sidebar() {
               >
                 Sign Out
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Auth Required Modal */}
+      {showAuthModal && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[200] flex items-center justify-center p-4 animate-fade-in" onClick={() => setShowAuthModal(false)}>
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-scale-in border border-gray-200" onClick={(e) => e.stopPropagation()}>
+            <div className="w-14 h-14 bg-violet-50 rounded-full flex items-center justify-center mx-auto mb-4">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-violet-500">
+                <path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4" /><polyline points="10 17 15 12 10 7" /><line x1="15" y1="12" x2="3" y2="12" />
+              </svg>
+            </div>
+            <h3 className="text-lg font-bold text-gray-900 text-center mb-1">Sign in required</h3>
+            <p className="text-sm text-gray-500 text-center mb-6">You need to sign in to {authAction}.</p>
+            <div className="flex gap-3">
+              <button onClick={() => setShowAuthModal(false)} className="flex-1 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-xl transition-colors text-sm">Cancel</button>
+              <a href="/login" className="flex-1 py-2.5 bg-violet-600 hover:bg-violet-700 text-white font-bold rounded-xl transition-colors text-sm text-center shadow-md shadow-violet-200">Sign In</a>
             </div>
           </div>
         </div>

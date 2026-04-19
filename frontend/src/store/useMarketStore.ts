@@ -1,6 +1,20 @@
 import { create } from "zustand";
 import { MarketTrack } from "@/lib/api/marketClient";
 
+// Persist wishlist to localStorage
+function loadWishlist(): number[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const stored = localStorage.getItem("musiclab_wishlist");
+    return stored ? JSON.parse(stored) : [];
+  } catch { return []; }
+}
+
+function persistWishlist(ids: number[]) {
+  if (typeof window === "undefined") return;
+  localStorage.setItem("musiclab_wishlist", JSON.stringify(ids));
+}
+
 export interface CartItem {
   track: MarketTrack;
   licenseType: "standard" | "exclusive";
@@ -61,7 +75,7 @@ type MarketStore = MarketState & MarketActions;
 export const useMarketStore = create<MarketStore>((set, get) => ({
   cart: [],
   isCartOpen: false,
-  wishlist: [],
+  wishlist: loadWishlist(),
   activePreviewTrack: null,
   isPreviewPlaying: false,
   allTracks: [],
@@ -89,11 +103,11 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
   toggleWishlist: (trackId) =>
     set((state) => {
       const isAdded = state.wishlist.includes(trackId);
-      return {
-        wishlist: isAdded
-          ? state.wishlist.filter((id) => id !== trackId)
-          : [...state.wishlist, trackId],
-      };
+      const newWishlist = isAdded
+        ? state.wishlist.filter((id) => id !== trackId)
+        : [...state.wishlist, trackId];
+      persistWishlist(newWishlist);
+      return { wishlist: newWishlist };
     }),
 
   isInWishlist: (trackId) => get().wishlist.includes(trackId),

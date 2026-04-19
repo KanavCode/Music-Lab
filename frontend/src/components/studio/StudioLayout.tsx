@@ -8,6 +8,7 @@ import { saveProject, loadProject } from "@/lib/api/projectClient";
 import StudioSocketClient from "@/lib/api/socketClient";
 import Playhead from "./Playhead";
 import TrackRow from "./TrackRow";
+import { PIXELS_PER_SECOND } from "@/lib/constants/index";
 
 /**
  * StudioLayout — the main DAW workspace shell.
@@ -26,15 +27,14 @@ export default function StudioLayout() {
   const [elapsedTime, setElapsedTime] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Timer for elapsed playback time
+  // Timer for elapsed playback time — reads from AudioEngine
   useEffect(() => {
-    if (isPlaying) {
-      timerRef.current = setInterval(() => {
-        setElapsedTime((prev) => prev + 0.1);
-      }, 100);
-    } else {
-      if (timerRef.current) clearInterval(timerRef.current);
-    }
+    const update = () => {
+      try {
+        setElapsedTime(AudioEngine.getInstance().getCurrentTime());
+      } catch { /* engine not ready */ }
+    };
+    timerRef.current = setInterval(update, isPlaying ? 100 : 500);
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
@@ -111,23 +111,24 @@ export default function StudioLayout() {
         const uploadResult = await uploadAudioFile(file);
         const streamUrl = getStreamUrl(uploadResult.streamUrl);
         const regionId = `region-${Date.now()}`;
-        const currentTracks = useStudioStore.getState().tracks;
-        let targetTrackId: string;
 
-        if (currentTracks.length === 0) {
-          targetTrackId = `track-${Date.now()}`;
-          addTrack({ trackId: targetTrackId, name: file.name.replace(/\.[^/.]+$/, ""), volume: 0.8, isMuted: false, regions: [] });
-        } else {
-          targetTrackId = currentTracks[0].trackId;
-        }
+        // Load into engine first to get actual audio duration
+        const duration = await engine.loadRegion(regionId, streamUrl, 0);
 
-        addRegionToTrack(targetTrackId, { sampleId: regionId, startTime: 0, duration: 5, audioFileUrl: streamUrl });
-        await engine.loadRegion(regionId, streamUrl, 0);
+        // Always create a NEW track for each imported file
+        const targetTrackId = `track-${Date.now()}`;
+        addTrack({
+          trackId: targetTrackId,
+          name: file.name.replace(/\.[^/.]+$/, ""),
+          volume: 0.8,
+          isMuted: false,
+          regions: [{ sampleId: regionId, startTime: 0, duration, audioFileUrl: streamUrl }],
+        });
       } catch {
         alert("Upload failed. Ensure the backend is running.");
       }
     },
-    [addTrack, addRegionToTrack]
+    [addTrack]
   );
 
   const handleFileUpload = useCallback(
@@ -214,6 +215,42 @@ export default function StudioLayout() {
     addTrack({ trackId: id, name: `Track ${num}`, volume: 0.8, isMuted: false, regions: [] });
   }, [tracks.length, addTrack]);
 
+  // Mute/unmute with AudioEngine sync
+  const handleToggleMute = useCallback((trackId: string) => {
+    toggleTrackMute(trackId, false);
+    // After toggle, read new state and sync to AudioEngine
+    const track = useStudioStore.getState().tracks.find(t => t.trackId === trackId);
+    if (track) {
+      const engine = AudioEngine.getInstance();
+      for (const region of track.regions) {
+        engine.setPlayerMute(region.sampleId, track.isMuted);
+      }
+    }
+  }, [toggleTrackMute]);
+
+  // Click & drag on ruler to seek
+  const handleRulerMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const rulerEl = e.currentTarget;
+    const seekTo = (clientX: number) => {
+      const rect = rulerEl.getBoundingClientRect();
+      const x = clientX - rect.left;
+      const time = Math.max(0, x / PIXELS_PER_SECOND);
+      AudioEngine.getInstance().seek(time);
+      setElapsedTime(time);
+    };
+    seekTo(e.clientX);
+    const onMove = (me: MouseEvent) => seekTo(me.clientX);
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+    };
+    document.body.style.cursor = "col-resize";
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, []);
+
   // Format time for display
   const formatTime = (t: number) => {
     const mins = Math.floor(t / 60);
@@ -286,10 +323,7 @@ export default function StudioLayout() {
             )}
           </button>
 
-          {/* Record (decorative) */}
-          <button className="w-9 h-9 rounded-lg bg-gray-100 hover:bg-red-50 text-gray-400 hover:text-red-500 flex items-center justify-center transition-colors border border-gray-200" title="Record">
-            <div className="w-3 h-3 rounded-full bg-current" />
-          </button>
+
         </div>
 
         {/* Right: BPM, Metronome, Upload, Mixer */}
@@ -382,14 +416,14 @@ export default function StudioLayout() {
             <div className="flex-1">
               {tracks.map((track, i) => (
                 <div key={track.trackId}
-                  className="flex items-center gap-2 px-3 py-2.5 border-b border-gray-100 hover:bg-gray-50 transition-colors group">
-                  <div className={`w-1.5 h-8 rounded-full ${track.isMuted ? "bg-gray-300" : ["bg-violet-400","bg-emerald-400","bg-amber-400","bg-rose-400","bg-sky-400"][i % 5]}`} />
+                  className="flex items-center gap-2 px-3 h-20 border-b border-gray-100 hover:bg-gray-50 transition-colors group">
+                  <div className={`w-1.5 h-10 rounded-full ${track.isMuted ? "bg-gray-300" : ["bg-violet-400","bg-emerald-400","bg-amber-400","bg-rose-400","bg-sky-400"][i % 5]}`} />
                   <div className="flex-1 min-w-0">
                     <span className="text-xs font-medium text-gray-800 truncate block">{track.name}</span>
                     <span className="text-[10px] text-gray-400">{track.regions.length} clip{track.regions.length !== 1 ? "s" : ""}</span>
                   </div>
                   {/* Mute */}
-                  <button onClick={() => toggleTrackMute(track.trackId, false)}
+                  <button onClick={() => handleToggleMute(track.trackId)}
                     className={`w-6 h-5 rounded text-[9px] font-bold uppercase transition-colors ${
                       track.isMuted ? "bg-red-100 text-red-500" : "bg-gray-100 text-gray-400 hover:bg-gray-200"
                     }`} title={track.isMuted ? "Unmute" : "Mute"}>
@@ -427,17 +461,25 @@ export default function StudioLayout() {
           onDragLeave={handleTimelineDragLeave}
           onDrop={handleTimelineDrop}
         >
-          {/* Timeline ruler */}
-          <div className="sticky top-0 z-40 h-8 bg-white/90 backdrop-blur border-b border-gray-200 flex items-end">
-            {Array.from({ length: 60 }, (_, i) => (
-              <div key={i} className="shrink-0 border-l border-gray-200 h-full flex items-end px-1" style={{ width: 50 }}>
-                <span className="text-[10px] text-gray-400 font-mono mb-1">{i}s</span>
-              </div>
-            ))}
+          {/* Timeline ruler — click/drag to seek */}
+          <div
+            className="sticky top-0 z-40 h-8 bg-white/90 backdrop-blur border-b border-gray-200 flex items-end cursor-pointer select-none"
+            onMouseDown={handleRulerMouseDown}
+          >
+            {Array.from({ length: 421 }, (_, i) => {
+              const showLabel = i % 10 === 0;
+              const mins = Math.floor(i / 60);
+              const secs = i % 60;
+              return (
+                <div key={i} className={`shrink-0 h-full flex items-end ${showLabel ? 'border-l border-gray-300 px-1' : i % 5 === 0 ? 'border-l border-gray-200' : 'border-l border-gray-100'}`} style={{ width: 50 }}>
+                  {showLabel && <span className="text-[10px] text-gray-400 font-mono mb-1 whitespace-nowrap">{mins}:{secs.toString().padStart(2, '0')}</span>}
+                </div>
+              );
+            })}
           </div>
 
           {/* Track lanes + Playhead */}
-          <div className="relative min-h-full" style={{ minWidth: 60 * 50 }}>
+          <div className="relative min-h-full" style={{ minWidth: 421 * 50 }}>
             <Playhead />
 
             {tracks.length === 0 ? (

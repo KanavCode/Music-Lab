@@ -50,7 +50,7 @@ class AudioEngine {
    * @param audioUrl  - URL to the audio file (from /api/v1/audio/stream/{filename})
    * @param startTime - When this region should start playing on the Transport timeline (in seconds)
    */
-  async loadRegion(regionId: string, audioUrl: string, startTime: number): Promise<void> {
+  async loadRegion(regionId: string, audioUrl: string, startTime: number): Promise<number> {
     // Dispose existing player for this region if reloading
     if (this.players.has(regionId)) {
       this.players.get(regionId)!.dispose();
@@ -69,7 +69,9 @@ class AudioEngine {
     player.sync().start(startTime);
 
     this.players.set(regionId, player);
-    console.log(`[AudioEngine] Loaded region '${regionId}' at ${startTime}s from ${audioUrl}`);
+    const duration = player.buffer.duration;
+    console.log(`[AudioEngine] Loaded region '${regionId}' at ${startTime}s, duration: ${duration}s`);
+    return duration;
   }
 
   /**
@@ -122,6 +124,23 @@ class AudioEngine {
   pause(): void {
     Tone.getTransport().pause();
     console.log("[AudioEngine] Transport paused at", this.getCurrentTime());
+  }
+
+  /**
+   * Seeks Transport to a specific position in seconds.
+   */
+  seek(seconds: number): void {
+    Tone.getTransport().seconds = Math.max(0, seconds);
+  }
+
+  /**
+   * Mutes or unmutes a specific player by region ID.
+   */
+  setPlayerMute(regionId: string, muted: boolean): void {
+    const player = this.players.get(regionId);
+    if (player) {
+      player.mute = muted;
+    }
   }
 
   /**
